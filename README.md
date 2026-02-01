@@ -1,6 +1,6 @@
 # Live Bidding Platform
 
-A real-time auction platform built with Node.js, Socket.io, and React. Users can compete to bid on items in real-time with proper race condition handling and synchronized countdown timers.
+A real-time auction platform built with Node.js, Socket.io, and React JS. Users can compete to bid on items in real-time with proper race condition handling and synchronized countdown timers.
 
 ## Features
 
