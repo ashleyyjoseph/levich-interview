@@ -2,16 +2,18 @@ import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import io from 'socket.io-client';
 import AuctionCard from './AuctionCard';
+import { useToast } from '../contexts/ToastContext';
 import './Dashboard.css';
 
 const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
 
-function Dashboard() {
+function Dashboard({ userName }) {
   const [items, setItems] = useState([]);
   const [serverTimeOffset, setServerTimeOffset] = useState(0);
-  const [userId] = useState(() => `user_${Math.random().toString(36).substr(2, 9)}`);
   const [socketId, setSocketId] = useState(null);
+  const [userBids, setUserBids] = useState({}); // { itemId: { userName: [bids] } }
   const socketRef = useRef(null);
+  const toast = useToast();
 
   useEffect(() => {
     // Fetch initial items
@@ -49,6 +51,10 @@ function Dashboard() {
 
     socket.on('items_update', (updatedItems) => {
       setItems(updatedItems);
+      // Fetch user bids for all items
+      updatedItems.forEach(item => {
+        fetchUserBids(item.id);
+      });
     });
 
     socket.on('UPDATE_BID', (bidData) => {
@@ -65,6 +71,8 @@ function Dashboard() {
             : item
         )
       );
+      // Refresh user bids for this item
+      fetchUserBids(bidData.itemId);
     });
 
     socket.on('server_time', (data) => {
@@ -74,11 +82,13 @@ function Dashboard() {
 
     socket.on('bid_success', (data) => {
       console.log('Bid successful:', data);
+      // Refresh user bids after successful bid
+      fetchUserBids(data.itemId);
     });
 
     socket.on('bid_error', (error) => {
       console.error('Bid error:', error);
-      alert(error.message || 'Failed to place bid');
+      toast.error(error.message || 'Failed to place bid');
     });
 
     return () => {
@@ -90,6 +100,20 @@ function Dashboard() {
       }
     };
   }, []);
+
+  const fetchUserBids = async (itemId) => {
+    try {
+      const response = await axios.get(`${API_URL}/items/${itemId}/bids`);
+      if (response.data.success) {
+        setUserBids(prev => ({
+          ...prev,
+          [itemId]: response.data.userBids
+        }));
+      }
+    } catch (error) {
+      console.error('Error fetching user bids:', error);
+    }
+  };
 
   const fetchItems = async () => {
     try {
@@ -119,7 +143,7 @@ function Dashboard() {
     if (!item) return;
 
     if (!socketRef.current || !socketRef.current.connected) {
-      alert('Not connected to server. Please wait for connection.');
+      toast.warning('Not connected to server. Please wait for connection.');
       return;
     }
 
@@ -127,7 +151,7 @@ function Dashboard() {
     socketRef.current.emit('BID_PLACED', {
       itemId,
       bidAmount: newBid,
-      userId
+      userName
     });
   };
 
@@ -143,9 +167,10 @@ function Dashboard() {
             key={item.id}
             item={item}
             onBid={handleBid}
-            userId={userId}
+            userName={userName}
             socketId={socketId}
             getServerTime={getServerTime}
+            userBids={userBids[item.id] || {}}
           />
         ))}
       </div>

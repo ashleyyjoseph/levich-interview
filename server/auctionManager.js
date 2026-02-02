@@ -6,39 +6,16 @@ class AuctionManager {
   constructor() {
     // In-memory storage for auction items
     // In production, this would be replaced with a database
-    this.items = [
-      {
-        id: '1',
-        title: 'Vintage Watch',
-        startingPrice: 50,
-        currentBid: 50,
-        auctionEndTime: Date.now() + 1 * 60 * 1000, // 1 minute from now
-        highestBidder: null,
-        bidderId: null
-      },
-      {
-        id: '2',
-        title: 'Rare Painting',
-        startingPrice: 100,
-        currentBid: 100,
-        auctionEndTime: Date.now() + 1 * 60 * 1000, // 1 minute from now
-        highestBidder: null,
-        bidderId: null
-      },
-      {
-        id: '3',
-        title: 'Antique Vase',
-        startingPrice: 75,
-        currentBid: 75,
-        auctionEndTime: Date.now() + 1 * 60 * 1000, // 1 minute from now
-        highestBidder: null,
-        bidderId: null
-      }
-    ];
+    this.items = [];
+    this.nextItemId = 1;
 
     // Map to track pending bids per item (prevents race conditions)
     // Key: itemId, Value: Promise resolving to bid result
     this.pendingBids = new Map();
+
+    // Track bids by user name per item
+    // Structure: { itemId: { userName: [{ amount, timestamp }] } }
+    this.userBids = {};
   }
 
   /**
@@ -50,6 +27,7 @@ class AuctionManager {
       title: item.title,
       startingPrice: item.startingPrice,
       currentBid: item.currentBid,
+      duration: item.duration,
       auctionEndTime: item.auctionEndTime,
       highestBidder: item.highestBidder,
       bidderId: item.bidderId
@@ -57,14 +35,71 @@ class AuctionManager {
   }
 
   /**
+   * Get bids by user for a specific item
+   */
+  getUserBidsForItem(itemId) {
+    if (!this.userBids[itemId]) {
+      return {};
+    }
+    return this.userBids[itemId];
+  }
+
+  /**
+   * Create a new auction item
+   */
+  createItem(title, startingPrice, duration) {
+    const newItem = {
+      id: String(this.nextItemId++),
+      title,
+      startingPrice,
+      currentBid: startingPrice,
+      duration: duration, // Store duration for when auction starts
+      auctionEndTime: null, // Will be set when auction starts
+      highestBidder: null,
+      bidderId: null
+    };
+
+    this.items.push(newItem);
+    this.userBids[newItem.id] = {};
+
+    return newItem;
+  }
+
+  /**
+   * Start an auction for an item
+   */
+  startAuction(itemId, durationMinutes) {
+    const item = this.items.find(i => i.id === itemId);
+    
+    if (!item) {
+      return { success: false, error: 'Item not found' };
+    }
+
+    if (item.auctionEndTime && Date.now() < item.auctionEndTime) {
+      return { success: false, error: 'Auction is already active' };
+    }
+
+    // Use provided durationMinutes or fall back to item's stored duration
+    const duration = durationMinutes || item.duration || 1;
+    item.auctionEndTime = Date.now() + (duration * 60 * 1000);
+    return { success: true, item };
+  }
+
+  /**
    * Place a bid on an item with race condition protection
    * Uses a promise queue per item to ensure only one bid is processed at a time
+   * Now uses userName instead of userId
    */
-  async placeBid(itemId, bidAmount, userId, socketId) {
+  async placeBid(itemId, bidAmount, userName, socketId) {
     const item = this.items.find(i => i.id === itemId);
 
     if (!item) {
       return { success: false, error: 'Item not found', itemId };
+    }
+
+    // Check if auction has started
+    if (!item.auctionEndTime) {
+      return { success: false, error: 'Auction has not started yet', itemId };
     }
 
     // Check if auction has ended
@@ -88,7 +123,7 @@ class AuctionManager {
     }
 
     // Create a new promise for this bid
-    const bidPromise = this.processBid(item, bidAmount, userId, socketId);
+    const bidPromise = this.processBid(item, bidAmount, userName, socketId);
     this.pendingBids.set(itemId, bidPromise);
 
     try {
@@ -102,8 +137,9 @@ class AuctionManager {
 
   /**
    * Process a bid (called after race condition check)
+   * Now tracks bids by user name
    */
-  async processBid(item, bidAmount, userId, socketId) {
+  async processBid(item, bidAmount, userName, socketId) {
     // Double-check auction hasn't ended while waiting
     if (Date.now() >= item.auctionEndTime) {
       return { success: false, error: 'Auction has ended', itemId: item.id };
@@ -118,10 +154,25 @@ class AuctionManager {
       };
     }
 
+    // Initialize user bids tracking for this item if needed
+    if (!this.userBids[item.id]) {
+      this.userBids[item.id] = {};
+    }
+    if (!this.userBids[item.id][userName]) {
+      this.userBids[item.id][userName] = [];
+    }
+
+    // Track this bid with timestamp (including milliseconds)
+    const bidTimestamp = Date.now();
+    this.userBids[item.id][userName].push({
+      amount: bidAmount,
+      timestamp: bidTimestamp
+    });
+
     // Update the item
     const previousBidder = item.bidderId;
     item.currentBid = bidAmount;
-    item.highestBidder = userId;
+    item.highestBidder = userName;
     item.bidderId = socketId;
 
     return {
